@@ -19,45 +19,91 @@ function LoginPage() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [authHint, setAuthHint] = useState<string | null>(null);
 
-  useEffect(() => { if (!loading && user) navigate({ to: "/radar" }); }, [user, loading, navigate]);
+  useEffect(() => {
+    if (!loading && user) navigate({ to: "/radar" });
+  }, [user, loading, navigate]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
+    setAuthHint(null);
+
     try {
       if (mode === "signin") {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-      } else {
-        const { error } = await supabase.auth.signUp({
-          email, password,
-          options: { emailRedirectTo: window.location.origin, data: { full_name: name } },
-        });
-        if (error) throw error;
-        toast.success("Conta criada! Verifique seu e-mail para confirmar.");
+        navigate({ to: "/radar" });
+        return;
       }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Erro de autenticação");
-    } finally { setBusy(false); }
-  }
 
-  async function handleGoogle() {
-    setBusy(true);
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
         options: {
-          redirectTo: `${window.location.origin}/radar`,
-          queryParams: {
-            access_type: "offline",
-            prompt: "consent",
-          },
+          emailRedirectTo: `${window.location.origin}/radar`,
+          data: { full_name: name },
         },
       });
+
       if (error) throw error;
+
+      if (data.session) {
+        toast.success("Conta criada com sucesso!");
+        navigate({ to: "/radar" });
+      } else {
+        toast.success("Conta criada! Verifique seu e-mail para confirmar o acesso.");
+        setAuthHint("Se a confirmação por e-mail estiver ativa no Supabase, confirme a conta antes de entrar.");
+        setMode("signin");
+      }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Erro ao entrar com Google");
+      const message = getFriendlyAuthError(err);
+      setAuthHint(message);
+      toast.error(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handlePasswordReset() {
+    if (!email) {
+      toast.error("Informe seu e-mail para recuperar a senha.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/login`,
+      });
+      if (error) throw error;
+      toast.success("Enviamos um link de recuperação para o seu e-mail.");
+    } catch (err) {
+      toast.error(getFriendlyAuthError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResendConfirmation() {
+    if (!email) {
+      toast.error("Informe seu e-mail para reenviar a confirmação.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email,
+        options: { emailRedirectTo: `${window.location.origin}/radar` },
+      });
+      if (error) throw error;
+      toast.success("Reenviamos o e-mail de confirmação.");
+    } catch (err) {
+      toast.error(getFriendlyAuthError(err));
+    } finally {
       setBusy(false);
     }
   }
@@ -72,24 +118,15 @@ function LoginPage() {
           <h1 className="text-3xl font-bold tracking-tight">LeadFlow</h1>
           <p className="text-sm text-muted-foreground mt-1">Central de inteligência comercial</p>
         </div>
+
         <Card>
           <CardHeader>
             <CardTitle>{mode === "signin" ? "Entrar" : "Criar conta"}</CardTitle>
             <CardDescription>
-              {mode === "signin" ? "Acesse seu Radar de Clientes" : "Comece a prospectar em segundos"}
+              {mode === "signin" ? "Acesse seu Radar de Clientes" : "Crie seu acesso com e-mail e senha"}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Button variant="outline" className="w-full gap-2" onClick={handleGoogle} disabled={busy}>
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <GoogleMark />}
-              {mode === "signin" ? "Entrar com Google" : "Cadastrar com Google"}
-            </Button>
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center"><span className="w-full border-t" /></div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-card px-2 text-muted-foreground">ou</span>
-              </div>
-            </div>
             <form onSubmit={handleSubmit} className="space-y-3">
               {mode === "signup" && (
                 <div className="space-y-1.5">
@@ -97,27 +134,63 @@ function LoginPage() {
                   <Input id="name" value={name} onChange={(e) => setName(e.target.value)} required />
                 </div>
               )}
+
               <div className="space-y-1.5">
                 <Label htmlFor="email">E-mail</Label>
                 <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
               </div>
+
               <div className="space-y-1.5">
                 <Label htmlFor="password">Senha</Label>
-                <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} />
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={6}
+                />
               </div>
+
+              {authHint && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  {authHint}
+                </div>
+              )}
+
               <Button type="submit" className="w-full" disabled={busy}>
                 {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {mode === "signin" ? "Entrar" : "Criar conta"}
               </Button>
             </form>
+
+            {mode === "signin" && (
+              <div className="grid gap-2 text-center text-xs text-muted-foreground">
+                <button type="button" onClick={handlePasswordReset} className="hover:text-foreground" disabled={busy}>
+                  Esqueci minha senha
+                </button>
+                <button type="button" onClick={handleResendConfirmation} className="hover:text-foreground" disabled={busy}>
+                  Reenviar confirmação de e-mail
+                </button>
+              </div>
+            )}
+
             <p className="text-center text-sm text-muted-foreground">
               {mode === "signin" ? "Não tem conta? " : "Já tem conta? "}
-              <button type="button" onClick={() => setMode(mode === "signin" ? "signup" : "signin")} className="text-primary hover:underline">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthHint(null);
+                  setMode(mode === "signin" ? "signup" : "signin");
+                }}
+                className="text-primary hover:underline"
+              >
                 {mode === "signin" ? "Criar agora" : "Entrar"}
               </button>
             </p>
           </CardContent>
         </Card>
+
         <p className="mt-4 text-center text-xs text-muted-foreground">
           <Link to="/" className="hover:text-foreground">← Voltar</Link>
         </p>
@@ -126,10 +199,25 @@ function LoginPage() {
   );
 }
 
-function GoogleMark() {
-  return (
-    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-foreground text-[11px] font-bold text-background">
-      G
-    </span>
-  );
+function getFriendlyAuthError(err: unknown) {
+  const rawMessage = err instanceof Error ? err.message : "Erro de autenticação";
+  const message = rawMessage.toLowerCase();
+
+  if (message.includes("invalid login credentials")) {
+    return "Credenciais inválidas. Verifique e-mail/senha ou crie uma conta antes de entrar.";
+  }
+
+  if (message.includes("email not confirmed")) {
+    return "Seu e-mail ainda não foi confirmado. Use o botão para reenviar a confirmação.";
+  }
+
+  if (message.includes("user already registered") || message.includes("already registered")) {
+    return "Este e-mail já possui cadastro. Entre com sua senha ou use recuperação de senha.";
+  }
+
+  if (message.includes("password")) {
+    return "A senha precisa ter pelo menos 6 caracteres.";
+  }
+
+  return rawMessage;
 }
