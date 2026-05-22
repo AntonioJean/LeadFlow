@@ -16,6 +16,7 @@ import { Route as AuthenticatedWhatsappRouteImport } from './routes/_authenticat
 import { Route as AuthenticatedTemplatesRouteImport } from './routes/_authenticated/templates'
 import { Route as AuthenticatedRadarRouteImport } from './routes/_authenticated/radar'
 import { Route as AuthenticatedLeadsRouteImport } from './routes/_authenticated/leads'
+import { Route as AuthenticatedIaRouteImport } from './routes/_authenticated/ia'
 import { Route as AuthenticatedFunilRouteImport } from './routes/_authenticated/funil'
 import { Route as AuthenticatedFollowupsRouteImport } from './routes/_authenticated/followups'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
@@ -55,6 +56,11 @@ const AuthenticatedRadarRoute = AuthenticatedRadarRouteImport.update({
 const AuthenticatedLeadsRoute = AuthenticatedLeadsRouteImport.update({
   id: '/leads',
   path: '/leads',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedIaRoute = AuthenticatedIaRouteImport.update({
+  id: '/ia',
+  path: '/ia',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedFunilRoute = AuthenticatedFunilRouteImport.update({
@@ -97,6 +103,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/followups': typeof AuthenticatedFollowupsRoute
   '/funil': typeof AuthenticatedFunilRoute
+  '/ia': typeof AuthenticatedIaRoute
   '/leads': typeof AuthenticatedLeadsRoute
   '/radar': typeof AuthenticatedRadarRoute
   '/templates': typeof AuthenticatedTemplatesRoute
@@ -111,6 +118,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/followups': typeof AuthenticatedFollowupsRoute
   '/funil': typeof AuthenticatedFunilRoute
+  '/ia': typeof AuthenticatedIaRoute
   '/leads': typeof AuthenticatedLeadsRoute
   '/radar': typeof AuthenticatedRadarRoute
   '/templates': typeof AuthenticatedTemplatesRoute
@@ -127,6 +135,7 @@ export interface FileRoutesById {
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/followups': typeof AuthenticatedFollowupsRoute
   '/_authenticated/funil': typeof AuthenticatedFunilRoute
+  '/_authenticated/ia': typeof AuthenticatedIaRoute
   '/_authenticated/leads': typeof AuthenticatedLeadsRoute
   '/_authenticated/radar': typeof AuthenticatedRadarRoute
   '/_authenticated/templates': typeof AuthenticatedTemplatesRoute
@@ -143,6 +152,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/followups'
     | '/funil'
+    | '/ia'
     | '/leads'
     | '/radar'
     | '/templates'
@@ -157,6 +167,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/followups'
     | '/funil'
+    | '/ia'
     | '/leads'
     | '/radar'
     | '/templates'
@@ -172,6 +183,7 @@ export interface FileRouteTypes {
     | '/_authenticated/dashboard'
     | '/_authenticated/followups'
     | '/_authenticated/funil'
+    | '/_authenticated/ia'
     | '/_authenticated/leads'
     | '/_authenticated/radar'
     | '/_authenticated/templates'
@@ -238,6 +250,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedLeadsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/ia': {
+      id: '/_authenticated/ia'
+      path: '/ia'
+      fullPath: '/ia'
+      preLoaderRoute: typeof AuthenticatedIaRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/funil': {
       id: '/_authenticated/funil'
       path: '/funil'
@@ -288,6 +307,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedFollowupsRoute: typeof AuthenticatedFollowupsRoute
   AuthenticatedFunilRoute: typeof AuthenticatedFunilRoute
+  AuthenticatedIaRoute: typeof AuthenticatedIaRoute
   AuthenticatedLeadsRoute: typeof AuthenticatedLeadsRoute
   AuthenticatedRadarRoute: typeof AuthenticatedRadarRoute
   AuthenticatedTemplatesRoute: typeof AuthenticatedTemplatesRoute
@@ -299,6 +319,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedFollowupsRoute: AuthenticatedFollowupsRoute,
   AuthenticatedFunilRoute: AuthenticatedFunilRoute,
+  AuthenticatedIaRoute: AuthenticatedIaRoute,
   AuthenticatedLeadsRoute: AuthenticatedLeadsRoute,
   AuthenticatedRadarRoute: AuthenticatedRadarRoute,
   AuthenticatedTemplatesRoute: AuthenticatedTemplatesRoute,

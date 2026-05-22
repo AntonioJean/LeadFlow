@@ -43,10 +43,11 @@ function RadarPage() {
   const [cnpjInput, setCnpjInput] = useState("");
   const [csvDialog, setCsvDialog] = useState(false);
   const [csvText, setCsvText] = useState("");
+  const [searchVersion, setSearchVersion] = useState(0);
 
   const statsQ = useQuery({ queryKey: ["radar-stats"], queryFn: () => stats() });
   const searchQ = useQuery({
-    queryKey: ["radar-search", filters],
+    queryKey: ["radar-search", filters, searchVersion],
     queryFn: () => search({ data: { ...filters, limit: 60 } }),
   });
 
@@ -93,6 +94,9 @@ function RadarPage() {
   });
 
   const companies = searchQ.data?.companies ?? [];
+  const provider = searchQ.data?.provider;
+  const importedFromGeoapify = searchQ.data?.importedFromGeoapify ?? 0;
+  const providerWarning = searchQ.data?.providerWarning;
   const indicators = [
     { label: "Empresas encontradas", value: companies.length, icon: Building2, color: "text-primary" },
     { label: "Empresas ativas", value: statsQ.data?.ativas ?? 0, icon: Activity, color: "text-success" },
@@ -185,7 +189,20 @@ function RadarPage() {
             <Label className="text-sm cursor-pointer">Apenas empresas ativas</Label>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => setSearchVersion((version) => version + 1)}
+              disabled={searchQ.isFetching}
+            >
+              {searchQ.isFetching ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Search className="h-4 w-4 mr-2" />}
+              Buscar empresas
+            </Button>
             <div className="text-xs text-muted-foreground mr-2">Visualização:</div>
+            {provider && (
+              <Badge variant="outline" className="mr-2">
+                Fonte: {provider === "geoapify" ? `Geoapify (+${importedFromGeoapify})` : "Cache"}
+              </Badge>
+            )}
             <Button size="sm" variant={view === "cards" ? "default" : "outline"} onClick={() => setView("cards")}>
               <LayoutGrid className="h-4 w-4" />
             </Button>
@@ -198,6 +215,16 @@ function RadarPage() {
 
       {/* Lista */}
       <div className="px-6 py-6 max-w-[1600px] mx-auto">
+        {searchQ.error && (
+          <div className="mb-4 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            Não foi possível buscar empresas: {(searchQ.error as Error).message}
+          </div>
+        )}
+        {providerWarning && (
+          <div className="mb-4 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
+            Aviso da busca: {providerWarning}
+          </div>
+        )}
         {searchQ.isLoading && (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="h-6 w-6 animate-spin text-primary" />
@@ -293,7 +320,7 @@ function EmptyState({ onCnpj, onCsv }: { onCnpj: () => void; onCsv: () => void }
       </div>
       <h2 className="text-xl font-semibold mb-2">Comece a prospectar</h2>
       <p className="text-sm text-muted-foreground mb-6">
-        A busca por cidade filtra o cache local. Para descobrir novas empresas, consulte CNPJs individualmente ou importe uma lista — todos serão enriquecidos pela BrasilAPI.
+        Informe cidade, UF e segmento para buscar empresas reais no Geoapify. Se o provedor estiver indisponivel, o Radar mostra o aviso na tela.
       </p>
       <div className="flex gap-2 justify-center">
         <Button onClick={onCnpj}><Search className="h-4 w-4 mr-2" /> Consultar CNPJ</Button>
@@ -306,6 +333,7 @@ function EmptyState({ onCnpj, onCsv }: { onCnpj: () => void; onCsv: () => void }
 function CompanyCard({ company, onOpen, onSave, saving }: any) {
   const cls = scoreClassification(company.score);
   const isLead = !!company.leadStatus;
+  const isPreview = !!company.geoapifyOnly;
   return (
     <Card className={cn(
       "p-5 transition-all hover:ring-1 hover:ring-primary/40 cursor-pointer relative overflow-hidden",
@@ -336,6 +364,10 @@ function CompanyCard({ company, onOpen, onSave, saving }: any) {
         {isLead ? (
           <Badge className="bg-success/15 text-success border-success/30 hover:bg-success/15">
             <CheckCircle2 className="h-3 w-3 mr-1" /> Já é lead
+          </Badge>
+        ) : isPreview ? (
+          <Badge variant="outline" className="border-warning/40 text-warning">
+            Prévia Geoapify
           </Badge>
         ) : (
           <Button size="sm" onClick={onSave} disabled={saving}>
@@ -387,6 +419,8 @@ function CompanyTable({ companies, onOpen, onSave }: any) {
                 <td className="px-4 py-3 text-right">
                   {c.leadStatus ? (
                     <Badge variant="outline" className="text-[10px] border-success/40 text-success">Lead</Badge>
+                  ) : c.geoapifyOnly ? (
+                    <Badge variant="outline" className="text-[10px] border-warning/40 text-warning">Prévia</Badge>
                   ) : (
                     <Button size="sm" variant="ghost" onClick={() => onSave(c.id)}>
                       <Plus className="h-3 w-3" />
@@ -405,6 +439,7 @@ function CompanyTable({ companies, onOpen, onSave }: any) {
 function CompanyDetails({ company, onRefetch, refetching }: any) {
   const cls = scoreClassification(company.score);
   const approach = APPROACH_SUGGESTIONS[company.segmento ?? ""] ?? APPROACH_SUGGESTIONS["Empresas em geral"];
+  const hasValidCnpj = isValidCnpj(company.cnpj);
   return (
     <>
       <SheetHeader className="space-y-2">
@@ -448,7 +483,12 @@ function CompanyDetails({ company, onRefetch, refetching }: any) {
           <p className="text-sm">{approach}</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={onRefetch} disabled={refetching}>
+          <Button
+            variant="outline"
+            onClick={hasValidCnpj ? onRefetch : () => toast.info("Esta empresa veio do Geoapify e ainda não possui CNPJ real para consultar na BrasilAPI.")}
+            disabled={refetching || !hasValidCnpj}
+            title={hasValidCnpj ? "Atualizar dados pelo CNPJ" : "BrasilAPI exige CNPJ real"}
+          >
             {refetching && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
             Atualizar via BrasilAPI
           </Button>
@@ -469,3 +509,4 @@ function Field({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+

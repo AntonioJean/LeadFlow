@@ -10,6 +10,7 @@ import {
 
 const BRASILAPI = "https://brasilapi.com.br/api/cnpj/v1";
 const CACHE_DAYS = 30;
+const GEOAPIFY_BASE = "https://api.geoapify.com";
 
 interface BrasilApiCnpj {
   cnpj: string;
@@ -178,32 +179,217 @@ const SearchSchema = z.object({
   limit: z.number().int().min(1).max(200).optional().default(60),
 });
 
+type SearchFilters = z.infer<typeof SearchSchema>;
+
+function getGeoapifyConfig() {
+  const enabled = (process.env.GEOAPIFY_ENABLED ?? "false").toLowerCase() === "true";
+  const provider = (process.env.RADAR_PROVIDER ?? "geoapify").toLowerCase();
+  const apiKey = process.env.GEOAPIFY_API_KEY ?? "";
+  return {
+    enabled: enabled && provider !== "mock" && Boolean(apiKey),
+    apiKey,
+    language: process.env.GEOAPIFY_LANGUAGE || "pt",
+    countryCode: (process.env.GEOAPIFY_COUNTRY_CODE || "br").toLowerCase(),
+  };
+}
+
+function segmentToGeoapifyCategories(segmento?: string, keyword?: string) {
+  const text = `${segmento ?? ""} ${keyword ?? ""}`.toLowerCase();
+  if (text.includes("farm")) return "commercial.health_and_beauty.pharmacy";
+  if (text.includes("restaurante")) return "catering.restaurant";
+  if (text.includes("lanchonete") || text.includes("pizzaria")) return "catering.restaurant,catering.fast_food";
+  if (text.includes("bar")) return "catering.bar";
+  if (text.includes("mercado") || text.includes("supermercado") || text.includes("mercadinho")) return "commercial.supermarket";
+  if (text.includes("roupa") || text.includes("loja")) return "commercial.clothing,commercial";
+  if (text.includes("auto") || text.includes("oficina")) return "commercial.vehicle,service.vehicle";
+  if (text.includes("clinica") || text.includes("clínica")) return "healthcare";
+  if (text.includes("pet")) return "commercial.pet";
+  if (text.includes("contabilidade")) return "office";
+  return "commercial,catering,healthcare,office";
+}
+
+function inferSegmentFromGeoapify(raw: any, fallback?: string) {
+  if (fallback && fallback !== "Todos") return fallback;
+  const categories = String(raw?.categories?.join(" ") ?? "").toLowerCase();
+  if (categories.includes("pharmacy")) return "Farmácia";
+  if (categories.includes("supermarket")) return "Mercado";
+  if (categories.includes("restaurant") || categories.includes("fast_food")) return "Restaurante";
+  if (categories.includes("clothing")) return "Loja";
+  if (categories.includes("vehicle")) return "Autopeças/Oficina";
+  if (categories.includes("healthcare")) return "Clínica";
+  if (categories.includes("pet")) return "Pet shop";
+  return "Empresas em geral";
+}
+
+function normalizeGeoapifyPhone(raw: any) {
+  const phone =
+    raw?.contact?.phone ??
+    raw?.phone ??
+    raw?.datasource?.raw?.phone ??
+    raw?.datasource?.raw?.["contact:phone"] ??
+    raw?.datasource?.raw?.["contact:mobile"] ??
+    null;
+  return phone ? onlyDigits(String(phone)) : null;
+}
+
+function syntheticGeoapifyCnpj(placeId: string) {
+  return `geoapify:${placeId}`.slice(0, 64);
+}
+
+function mapGeoapifyPlace(feature: any, filters: SearchFilters) {
+  const p = feature?.properties ?? {};
+  const placeId = String(p.place_id ?? p.datasource?.raw?.osm_id ?? `${p.lon}-${p.lat}-${p.name ?? "empresa"}`);
+  const name = p.name || p.address_line1 || "Empresa encontrada";
+  const row = {
+    cnpj: syntheticGeoapifyCnpj(placeId),
+    razao_social: name,
+    nome_fantasia: name,
+    cnae_principal: null,
+    cnae_descricao: p.categories?.join(", ") ?? null,
+    segmento: inferSegmentFromGeoapify(p, filters.segmento),
+    porte: null,
+    situacao_cadastral: "ATIVA",
+    data_situacao: null,
+    data_abertura: null,
+    telefone: normalizeGeoapifyPhone(p),
+    email: p.contact?.email ?? p.datasource?.raw?.email ?? null,
+    logradouro: p.street ?? p.address_line1 ?? null,
+    numero: p.housenumber ?? null,
+    complemento: null,
+    bairro: p.suburb ?? p.district ?? p.neighbourhood ?? null,
+    cep: p.postcode ?? null,
+    cidade: p.city ?? p.county ?? filters.cidade ?? null,
+    uf: p.state_code ?? filters.uf?.toUpperCase() ?? null,
+    capital_social: null,
+    fonte: "geoapify",
+    raw: {
+      provider: "geoapify",
+      placeId,
+      lat: p.lat,
+      lon: p.lon,
+      categories: p.categories ?? [],
+      address: p.formatted,
+      website: p.website ?? p.contact?.website ?? null,
+    } as unknown as never,
+  };
+  return {
+    ...row,
+    score: Math.min(100, computeScore(row) + (row.telefone ? 8 : 0) + (row.bairro ? 4 : 0)),
+  };
+}
+
+async function fetchGeoapifyCompanies(filters: SearchFilters) {
+  const cfg = getGeoapifyConfig();
+  if (!cfg.enabled) return [];
+  if (!filters.cidade && !filters.keyword) return [];
+
+  const locationText = [filters.cidade, filters.uf, "Brasil"].filter(Boolean).join(", ");
+  const geoUrl = new URL(`${GEOAPIFY_BASE}/v1/geocode/search`);
+  geoUrl.searchParams.set("text", locationText || filters.keyword || "Brasil");
+  geoUrl.searchParams.set("limit", "1");
+  geoUrl.searchParams.set("lang", cfg.language);
+  geoUrl.searchParams.set("filter", `countrycode:${cfg.countryCode}`);
+  geoUrl.searchParams.set("apiKey", cfg.apiKey);
+
+  const geoResponse = await fetch(geoUrl, { headers: { Accept: "application/json" } });
+  if (!geoResponse.ok) throw new Error(`Geoapify geocode HTTP ${geoResponse.status}`);
+  const geoJson: any = await geoResponse.json();
+  const center = geoJson?.features?.[0]?.properties;
+  if (!center?.lon || !center?.lat) return [];
+
+  const buildPlacesUrl = (useNameFilter: boolean) => {
+    const placesUrl = new URL(`${GEOAPIFY_BASE}/v2/places`);
+    placesUrl.searchParams.set("categories", segmentToGeoapifyCategories(filters.segmento, filters.keyword));
+    placesUrl.searchParams.set("filter", `circle:${center.lon},${center.lat},12000`);
+    placesUrl.searchParams.set("bias", `proximity:${center.lon},${center.lat}`);
+    placesUrl.searchParams.set("limit", String(Math.min(filters.limit, 100)));
+    placesUrl.searchParams.set("lang", cfg.language);
+    placesUrl.searchParams.set("apiKey", cfg.apiKey);
+    if (useNameFilter && filters.keyword) placesUrl.searchParams.set("name", filters.keyword);
+    return placesUrl;
+  };
+
+  let placesResponse = await fetch(buildPlacesUrl(Boolean(filters.keyword)), { headers: { Accept: "application/json" } });
+  if (!placesResponse.ok) throw new Error(`Geoapify places HTTP ${placesResponse.status}`);
+  let placesJson: any = await placesResponse.json();
+  if (filters.keyword && (placesJson?.features ?? []).length === 0) {
+    placesResponse = await fetch(buildPlacesUrl(false), { headers: { Accept: "application/json" } });
+    if (!placesResponse.ok) throw new Error(`Geoapify places HTTP ${placesResponse.status}`);
+    placesJson = await placesResponse.json();
+  }
+  return (placesJson?.features ?? []).map((feature: any) => mapGeoapifyPlace(feature, filters));
+}
+
+function toTransientGeoapifyCompany(row: any, index: number) {
+  return {
+    ...row,
+    id: `geoapify-preview-${index}-${row.cnpj}`,
+    geoapifyOnly: true,
+  };
+}
+
 export const searchCompanies = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((input) => SearchSchema.parse(input))
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
-    let q = supabase
-      .from("companies")
-      .select("*")
-      .order("score", { ascending: false })
-      .limit(data.limit);
+    const runDbSearch = async () => {
+      let q = supabase
+        .from("companies")
+        .select("*")
+        .order("score", { ascending: false })
+        .limit(data.limit);
 
-    if (data.cidade) q = q.ilike("cidade", `%${data.cidade}%`);
-    if (data.uf) q = q.eq("uf", data.uf.toUpperCase());
-    if (data.segmento && data.segmento !== "Todos") q = q.eq("segmento", data.segmento);
-    if (data.cnae) q = q.ilike("cnae_principal", `${onlyDigits(data.cnae)}%`);
-    if (data.porte && data.porte !== "Todos") q = q.ilike("porte", `%${data.porte}%`);
-    if (data.apenasAtivas) q = q.ilike("situacao_cadastral", "%ATIVA%");
-    if (data.keyword) {
-      const k = data.keyword;
-      q = q.or(
-        `nome_fantasia.ilike.%${k}%,razao_social.ilike.%${k}%,cnae_descricao.ilike.%${k}%`,
-      );
+      if (data.cidade) q = q.ilike("cidade", `%${data.cidade}%`);
+      if (data.uf) q = q.eq("uf", data.uf.toUpperCase());
+      if (data.segmento && data.segmento !== "Todos") q = q.eq("segmento", data.segmento);
+      if (data.cnae) q = q.ilike("cnae_principal", `${onlyDigits(data.cnae)}%`);
+      if (data.porte && data.porte !== "Todos") q = q.ilike("porte", `%${data.porte}%`);
+      if (data.apenasAtivas) q = q.ilike("situacao_cadastral", "%ATIVA%");
+      if (data.keyword) {
+        const k = data.keyword;
+        q = q.or(
+          `nome_fantasia.ilike.%${k}%,razao_social.ilike.%${k}%,cnae_descricao.ilike.%${k}%`,
+        );
+      }
+
+      const { data: companies, error } = await q;
+      if (error) throw new Error(error.message);
+      return companies ?? [];
+    };
+
+    let companies: any[] = [];
+    let provider = "cache";
+    let importedFromGeoapify = 0;
+    let providerWarning: string | null = null;
+
+    try {
+      companies = await runDbSearch();
+    } catch (error) {
+      providerWarning = error instanceof Error ? error.message : "Falha ao consultar cache do Supabase";
     }
 
-    const { data: companies, error } = await q;
-    if (error) throw new Error(error.message);
+    if (companies.length < Math.min(data.limit, 10)) {
+      try {
+        const geoRows = await fetchGeoapifyCompanies(data);
+        if (geoRows.length) {
+          const { data: upserted, error } = await supabase
+            .from("companies")
+            .upsert(geoRows, { onConflict: "cnpj" })
+            .select("*");
+          importedFromGeoapify = geoRows.length;
+          provider = "geoapify";
+          if (error) {
+            providerWarning = `Geoapify encontrou ${geoRows.length} empresas, mas o cache do Supabase não salvou: ${error.message}`;
+            companies = geoRows.map(toTransientGeoapifyCompany);
+          } else {
+            companies = upserted?.length ? upserted : geoRows.map(toTransientGeoapifyCompany);
+          }
+        }
+      } catch (error) {
+        providerWarning = error instanceof Error ? error.message : "Falha ao consultar Geoapify";
+      }
+    }
 
     // mark which are already leads of the current user
     const { data: leads } = await supabase
@@ -218,12 +404,15 @@ export const searchCompanies = createServerFn({ method: "POST" })
         leadStatus: leadMap.get(c.id) ?? null,
       })),
       totalCache: companies?.length ?? 0,
+      provider,
+      importedFromGeoapify,
+      providerWarning,
     };
   });
 
 // ---------------------------------------------------------------- lookupCnpj
 const LookupSchema = z.object({
-  cnpj: z.string().min(11).max(20),
+  cnpj: z.string().min(1).max(80),
   saveCache: z.boolean().optional().default(true),
 });
 

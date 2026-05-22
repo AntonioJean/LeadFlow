@@ -113,9 +113,14 @@ export async function getQrCode() {
         null;
       const code = res?.code ?? res?.pairingCode ?? null;
       if (raw) return { base64: String(raw), code };
+      lastError = new Error("A Evolution respondeu sem QR Code. Se a instância já estiver conectada, não é necessário escanear novamente. Caso contrário, remova/recrie a instância e gere um novo QR Code.");
     } catch (error) {
       lastError = error;
     }
+  }
+  const message = lastError instanceof Error ? lastError.message : "";
+  if (message.includes("Not Found") || message.includes("404")) {
+    throw new Error("Esta versão da Evolution não expôs uma rota antiga de QR Code. A rota compatível é /instance/connect. Se ainda não aparecer QR, recrie a instância e tente novamente.");
   }
   throw lastError instanceof Error ? lastError : new Error("Não foi possível gerar QR Code na Evolution API.");
 }
@@ -169,7 +174,16 @@ export function parseEvolutionPayload(payload: any, pathEvent?: string): ParsedE
       const messageId = String(key?.id ?? item?.messageId ?? item?.id ?? `${remoteJid}-${Date.now()}`);
       const messageType = item?.messageType ?? getMessageType(message);
       const content = extractContent(message, messageType);
-      const pushName = item?.pushName ?? item?.senderName ?? item?.notifyName ?? null;
+      const pushName =
+        item?.pushName ??
+        item?.senderName ??
+        item?.notifyName ??
+        item?.name ??
+        item?.contactName ??
+        item?.verifiedName ??
+        item?.contact?.pushName ??
+        item?.contact?.name ??
+        null;
       return {
         instance,
         remoteJid,
@@ -197,7 +211,10 @@ async function findDefaultOwner(admin: SupabaseAny) {
   if (roleUser?.user_id) return roleUser.user_id as string;
 
   const { data: profile } = await admin.from("profiles").select("id").limit(1).maybeSingle();
-  return profile?.id as string | undefined;
+  if (profile?.id) return profile.id as string;
+
+  const { data: users } = await admin.auth.admin.listUsers({ page: 1, perPage: 1 });
+  return users?.users?.[0]?.id as string | undefined;
 }
 
 async function findOrCreateLead(admin: SupabaseAny, ownerId: string, msg: ParsedEvolutionMessage) {

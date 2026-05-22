@@ -1,7 +1,7 @@
 import { Link, useRouterState, useNavigate } from "@tanstack/react-router";
 import {
   Radar, LayoutDashboard, Users, KanbanSquare, MessageSquare,
-  CheckSquare, FileText, Settings as SettingsIcon, LogOut, Sparkles,
+  CheckSquare, FileText, Settings as SettingsIcon, LogOut, Sparkles, Bot,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -12,6 +12,7 @@ const ITEMS = [
   { to: "/leads", icon: Users, label: "Leads" },
   { to: "/funil", icon: KanbanSquare, label: "Funil" },
   { to: "/whatsapp", icon: MessageSquare, label: "WhatsApp" },
+  { to: "/ia", icon: Bot, label: "Agente IA" },
   { to: "/followups", icon: CheckSquare, label: "Follow-ups" },
   { to: "/templates", icon: FileText, label: "Templates" },
   { to: "/configuracoes", icon: SettingsIcon, label: "Configurações" },
